@@ -5,3 +5,4 @@ from src.models.run import DecisionRun
 from src.models.note import TrialNote
 from src.models.user import User
 from src.models.audit import Audit
+from src.models.diagnosis import LooDiagnosis, LooDiagnosisBlock

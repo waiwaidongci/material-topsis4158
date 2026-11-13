@@ -92,17 +92,27 @@ C_i = D_i− / (D_i+ + D_i−)
 
 SHA256覆盖算法版本、完整冻结快照、原始中心权重、κ、情景数和seed。固定软件与输入可完整复算，结果同时存数据库和 `/artifacts/run-<id>.json`。指纹包含数据库ID，重建库或改变来源标识不保证相同指纹。运行列表只返回轻量摘要；详情按需读取完整情景，避免轮询反复搬运大JSON。
 
+## 候选逐一剔除诊断（只读、可续跑）
+
+结果页“候选剔除诊断”对一份**已完成**权衡发起，原权衡一行不改。诊断沿用该权衡冻结的测量、方向、中心权重，以及 `draws` 中保存的**同一批**权重情景（同序、不重新抽样）；先用批处理TOPSIS在原候选集上复算全部情景，并校验与归档贴近度逐元素相等（`baseline_recheck`，最大差须为0），再逐份剔除候选：对剩余候选重新做L2标准化与TOPSIS，记录每个指标的列范数、正/负理想点在剔除前后的值与差值，并统计剩余试样两两关系的变化。
+
+两类变化互斥、分开计数：**严格逆序**指严格顺序（大于/小于）翻成相反的严格顺序；**并列变化**指任一侧出现贴近度计算值完全相等的转换（严格↔并列、并列↔不同并列）。并列仍按平均并列名次，不以编号打破。中心权重与每个Dirichlet情景分别比较，因此每个试样对同时给出情景频率与中心权重结论；跨剔除再汇总每个试样对的观察剔除数、事件数与频率。
+
+诊断按剔除候选设检查点，可中断续跑：`loo_diagnoses` 只存定长进度与小清单（元数据、聚合、定长块头），`loo_diagnosis_blocks` 每个剔除候选一行精简投影（成对计数、中心结论、范数/理想点变化），插入一次即O(n)写入。完整反例（情景编号、权重、剔除前后得分与平均名次）按剔除候选各写一个文件，保存在共享卷目录 `/artifacts/diagnosis-<id>/blocks/<code>.json`，并以小的 `manifest.json` 封存清单与块头；不合并成单个巨型JSON——120候选上限下单文件写入仍在数据库包限制内。worker重启后跳过已完成候选，只重建缺失块；崩溃落在“块文件已写、检查点未提交”之间时重建该块且不产生重复行。页面经 `GET /diagnoses/{id}/blocks/{code}` 读精简成对计数，经 `GET /diagnoses/{id}/evidence` 按需读块文件中的完整反例。诊断自身有独立SHA256指纹，输入含原权衡指纹、复用情景数与候选/指标编码。
+
 ## 工程结构与开发
 
 ```text
 backend/src/{models,schemas,services,controllers,routes}  五个独立业务链
 backend/src/services/{normalization,topsis,weight_sensitivity}.py
 backend/src/{config,constants,middlewares,utils}/
-backend/{scripts/seed_demo.py,migrations/001_initial.sql}
+backend/{scripts/seed_demo.py,migrations/001_initial.sql,migrations/002_loo_diagnosis.sql}
 frontend/src/{api,stores,types,constants,components/common,hooks,pages,router,utils}/
 ```
 
-CandidateStudy、MaterialSample、Criterion、DecisionRun、TrialNote分别有独立model/schema/service/controller/route/API。studyStore管理研究及指标、sampleStore管理资料、researchStore管理任务/计划；六页为总览、输入口径、配置、结果、审阅、审计，登录另计。StudySelect复用于总览/输入/配置，PageHeading、ErrorNotice、StatusBadge等共享；RunSelect、WeightStrip、RankIntervals负责业务展示。
+CandidateStudy、MaterialSample、Criterion、DecisionRun、TrialNote分别有独立model/schema/service/controller/route/API；候选剔除诊断LooDiagnosis（含检查点子表LooDiagnosisBlock）有独立model/schema/service/controller/route/API，服务为 `services/diagnosis.py`（数值）与 `services/diagnosis_service.py`（编排）。studyStore管理研究及指标、sampleStore管理资料、researchStore管理任务/计划、diagnosisStore管理剔除诊断；六页为总览、输入口径、配置、结果、审阅、审计，登录另计。StudySelect复用于总览/输入/配置，PageHeading、ErrorNotice、StatusBadge等共享；RunSelect、WeightStrip、RankIntervals负责业务展示，LooDiagnosis面板嵌在结果页第四标签。worker同时扫描权衡队列与诊断队列，数据库行为权威、Redis仅唤醒。
+
+真实数值、服务集成（含中断续跑）、端到端API与手算oracle存于批次独立 `test-artifacts/gb-0024`。
 
 共享枚举Role、RunStatus、NoteStatus、Direction、MetricCode位于 `backend/src/constants/enums.py` 与 `frontend/src/constants/enums.ts`（类型联集在 `frontend/src/types/domain.ts`）；被auth依赖、criterion/note schema、services/worker状态、前端状态组件、口径与运行/结果/审阅页使用。
 
